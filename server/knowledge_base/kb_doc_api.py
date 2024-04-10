@@ -1,5 +1,4 @@
-import os
-import urllib
+
 from fastapi import File, Form, Body, Query, UploadFile
 from configs import (DEFAULT_VS_TYPE, EMBEDDING_MODEL,
                      VECTOR_SEARCH_TOP_K, SCORE_THRESHOLD,
@@ -17,6 +16,14 @@ from server.db.repository.knowledge_file_repository import get_file_detail
 from langchain.docstore.document import Document
 from server.knowledge_base.model.kb_document_model import DocumentWithVSId
 from typing import List, Dict
+
+import playwright
+import validators
+import asyncio
+import os
+import urllib
+from bs4 import BeautifulSoup
+
 
 
 def search_docs(
@@ -404,3 +411,128 @@ def recreate_vector_store(
                 kb.save_vector_store()
 
     return EventSourceResponse(output())
+
+
+def upload_url_doc(
+        url: str = Form(..., description="网页的URL"),
+        knowledge_base_name: str = Form(..., description="知识库名称", examples=["samples"]),
+        override: bool = Form(False, description="覆盖已有文件"),
+        to_vector_store: bool = Form(True, description="上传文件后是否进行向量化"),
+        chunk_size: int = Form(CHUNK_SIZE, description="知识库中单段文本最大长度"),
+        chunk_overlap: int = Form(OVERLAP_SIZE, description="知识库中相邻文本重合长度"),
+        zh_title_enhance: bool = Form(ZH_TITLE_ENHANCE, description="是否开启中文标题加强"),
+        docs: Json = Form({}, description="自定义的docs，需要转为json字符串",
+                          examples=[{"test.txt": [Document(page_content="custom doc")]}]),
+        not_refresh_vs_cache: bool = Form(False, description="暂不保存向量库（用于FAISS）"
+        ),
+) -> BaseResponse:
+    """
+    API接口：通过URL的方式上传一个网页，并/或向量化
+    """
+    if not validate_kb_name(knowledge_base_name):
+        return BaseResponse(code=403, msg="Don't attack me")
+
+    kb = KBServiceFactory.get_service_by_name(knowledge_base_name)
+
+    if kb is None:
+        return BaseResponse(code=404, msg=f"未找到知识库 {knowledge_base_name}")
+
+    # 检查URL是否合法
+    if not validators.url(url):
+        return BaseResponse(code=404, msg=f"您输入的网址不存在")
+
+    async def ascrape_playwright(url: str) -> str:
+        """
+        Asynchronously scrape the content of a given URL using Playwright's async API.
+
+        Args:
+            url (str): The URL to scrape.
+
+        Returns:
+            str: The scraped HTML content or an error message if an exception occurs.
+
+        """
+        from playwright.async_api import async_playwright
+
+        logger.info("Starting scraping...")
+        results = ""
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                await page.goto(url)
+                results = await page.content()  # Simply get the HTML content
+                logger.info("Content scraped")
+            except Exception as e:
+                logger.error(e)
+                raise
+            await browser.close()
+        return results
+
+
+    try:
+        html_content = asyncio.run(ascrape_playwright(url))
+
+        # 使用BeautifulSoup解析HTML
+        soup = BeautifulSoup(html_content, 'html.parser')
+        # 尝试获取<title>标签的内容作为文件名
+        title_tag = soup.find('title')
+
+        filename =''
+
+        # 如果取得失败，则从url里面提取title
+        if not title_tag:
+            title_tag = urllib.parse(url).netloc
+
+        # 保存文件
+        filename = str(title_tag.next) +  '.html'
+        try:
+            file_path = get_file_path(knowledge_base_name=knowledge_base_name, doc_name=filename)
+            data = {"knowledge_base_name": knowledge_base_name, "file_name": filename}
+
+            file_content = html_content  # 读取上传文件的内容
+            if (os.path.isfile(file_path)
+                    and not override
+                    and os.path.getsize(file_path) == len(file_content)
+            ):
+                file_status = f"文件 {title_tag} 已存在。"
+                logger.warn(file_status)
+                return BaseResponse(code=404, msg=file_status, data=data)
+
+            if not os.path.isdir(os.path.dirname(file_path)):
+                os.makedirs(os.path.dirname(file_path))
+            with open(file_path, "w", encoding='utf-8') as f:
+                f.write(file_content)
+
+        except Exception as e:
+            msg = f"{title_tag} 文件上传失败，报错信息为: {e}"
+            logger.error(f'{e.__class__.__name__}: {msg}',
+                         exc_info=e if log_verbose else None)
+            return BaseResponse(code=500, msg=msg, data=data)
+
+        # 将文件向量化，加入到库中
+        docs['url'] = url
+        docs['file_name'] = filename
+        docs['type'] = 'html'
+
+        if to_vector_store:
+            result = update_docs(
+                knowledge_base_name=knowledge_base_name,
+                file_names=[filename],
+                override_custom_docs=True,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                zh_title_enhance=zh_title_enhance,
+                docs=docs,
+                not_refresh_vs_cache=True,
+            )
+
+            if not not_refresh_vs_cache:
+                kb.save_vector_store()
+
+        return BaseResponse(code=200, msg="文件上传与向量化完成", data={"url": url})
+
+    except Exception as e:
+        return  BaseResponse(code=500, msg="加载网页到知识库失败", data={"error": str(e)})
+
+

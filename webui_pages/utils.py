@@ -1004,6 +1004,46 @@ class ApiRequest:
         resp = self.post("/chat/feedback", json=data)
         return self._get_response_value(resp)
 
+    def add_url_kb(
+            # self, url, knowledge_base_name, override, chunk_size, chunk_overlap, zh_title_enhance):
+        self,
+        url: str,
+        knowledge_base_name: str,
+        override: bool = False,
+        to_vector_store: bool = True,
+        chunk_size = CHUNK_SIZE,
+        chunk_overlap = OVERLAP_SIZE,
+        zh_title_enhance = ZH_TITLE_ENHANCE,
+        not_refresh_vs_cache: bool = False,
+
+    ):
+        logger.info('+++add_url_kb is called.')
+        '''
+        对应api.py/knowledge_base/upload_url_doc接口
+        '''
+        data = {
+            "url": url,
+            "knowledge_base_name": knowledge_base_name,
+            "override": override,
+            "to_vector_store": to_vector_store,
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "zh_title_enhance": zh_title_enhance,
+            "not_refresh_vs_cache": not_refresh_vs_cache,
+            "docs":{} # 暂时还未实现
+        }
+
+        logger.info(f'++++ data: {data}')
+
+        if isinstance(data["docs"], dict):
+            data["docs"] = json.dumps(data["docs"], ensure_ascii=False)
+        response = self.post(
+            "/knowledge_base/upload_url_doc",
+            data=data,
+
+        )
+        return self._get_response_value(response, as_json=True)
+
 
 class AsyncApiRequest(ApiRequest):
     def __init__(self, base_url: str = api_address(), timeout: float = HTTPX_DEFAULT_TIMEOUT):

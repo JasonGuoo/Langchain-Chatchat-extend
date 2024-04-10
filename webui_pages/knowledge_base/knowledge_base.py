@@ -185,6 +185,35 @@ def knowledge_base_page(api: ApiRequest, is_lite: bool = None):
                 st.toast(msg, icon="✖")
 
         st.divider()
+        # 扩展对url的支持
+        st.write("添加网页(URL)到知识库")
+
+        # 创建一个输入框，用于接收HTML链接
+        url_input = st.text_input("Enter the URL")
+
+
+        # 当按钮被点击时，调用add_url_kb()函数
+        if st.button("Add URL to KB"):
+            st.write('Calling upload_url_doc')
+            st.write(f'kb: {kb}')
+            st.write(f'url: {url_input}')
+            st.write(f'chunk_size {chunk_size}')
+            # 调用函数并处理结果
+            ret = api.add_url_kb(url=url_input,
+                                    knowledge_base_name=kb,
+                                    override=True,
+                                    chunk_size=chunk_size,
+                                    chunk_overlap=chunk_overlap,
+                                    zh_title_enhance=zh_title_enhance)
+            st.text(str(ret))
+
+            if msg := check_success_msg(ret):
+                st.toast(msg, icon="✔")
+            elif msg := check_error_msg(ret):
+                st.toast(msg, icon="✖")
+
+        # 知识库里已经包含的内容
+        st.divider()
 
         # 知识库详情
         # st.info("请选择文件，点击按钮进行操作。")
