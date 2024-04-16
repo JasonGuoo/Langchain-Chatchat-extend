@@ -178,3 +178,6 @@ test.py
 configs/*.py
 
 
+/bge-large-zh
+/chatglm3-6b
+/knowledge_base
